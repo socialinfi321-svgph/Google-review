@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Review Partner - Admin</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap" rel="stylesheet">
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+    }
+    ::-webkit-scrollbar {
+      width: 0px;
+      background: transparent;
+    }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "react": "https://esm.sh/react@18.2.0",
+      "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+      "lucide-react": "https://esm.sh/lucide-react@0.263.1"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="root"></div>
+  
+  <script type="module">
+    import React, { useState, useEffect, useRef } from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { Lock, Upload, Trash2, ArrowUp, ArrowDown, Clock, Activity, Plus } from 'lucide-react';
+
+    const ADMIN_PASS = "12345676";
+
+    const STORAGE_KEYS = {
+      QRS: 'review_partner_qrs',
+      SETTINGS: 'review_partner_settings',
+      STATS: 'review_partner_stats',
+    };
+
+    const DEFAULT_SETTINGS = {
+      intervalSeconds: 10,
+    };
+
+    const DEFAULT_STATS = {
+      totalContributions: 0,
+    };
+
+    const getQRCodes = () => {
+      try {
+        const data = localStorage.getItem(STORAGE_KEYS.QRS);
+        return data ? JSON.parse(data) : [];
+      } catch (e) {
+        console.error("Failed to load QRs", e);
+        return [];
+      }
+    };
+
+    const saveQRCodes = (qrs) => {
+      localStorage.setItem(STORAGE_KEYS.QRS, JSON.stringify(qrs));
+    };
+
+    const getSettings = () => {
+      try {
+        const data = localStorage.getItem(STORAGE_KEYS.SETTINGS);
+        return data ? JSON.parse(data) : DEFAULT_SETTINGS;
+      } catch (e) {
+        return DEFAULT_SETTINGS;
+      }
+    };
+
+    const saveSettings = (settings) => {
+      localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
+    };
+
+    const getStats = () => {
+      try {
+        const data = localStorage.getItem(STORAGE_KEYS.STATS);
+        return data ? JSON.parse(data) : DEFAULT_STATS;
+      } catch (e) {
+        return DEFAULT_STATS;
+      }
+    };
+
+    const fileToBase64 = (file) => {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = (error) => reject(error);
+      });
+    };
+
+    const AdminPage = () => {
+      const [isAuthenticated, setIsAuthenticated] = useState(false);
+      const [passwordInput, setPasswordInput] = useState("");
+      const [qrs, setQrs] = useState([]);
+      const [interval, setIntervalVal] = useState(10);
+      const [stats, setStats] = useState({ totalContributions: 0 });
+      const fileInputRef = useRef(null);
+
+      useEffect(() => {
+        if (isAuthenticated) {
+          setQrs(getQRCodes());
+          setIntervalVal(getSettings().intervalSeconds);
+          setStats(getStats());
+          
+          const intervalId = setInterval(() => {
+            setStats(getStats());
+          }, 2000);
+          return () => clearInterval(intervalId);
+        }
+      }, [isAuthenticated]);
+
+      const handleLogin = (e) => {
+        e.preventDefault();
+        if (passwordInput === ADMIN_PASS) {
+          setIsAuthenticated(true);
+        } else {
+          alert("Invalid Access Code");
+        }
+      };
+
+      const handleFileUpload = async (e) => {
+        if (e.target.files && e.target.files[0]) {
+          try {
+            const base64 = await fileToBase64(e.target.files[0]);
+            const newQR = {
+              id: Date.now().toString(),
+              name: `QR Code ${qrs.length + 1}`,
+              base64,
+            };
+            const updated = [...qrs, newQR];
+            setQrs(updated);
+            saveQRCodes(updated);
+          } catch (err) {
+            console.error(err);
+            alert("Failed to process image");
+          }
+        }
+        if (fileInputRef.current) fileInputRef.current.value = "";
+      };
+
+      const deleteQR = (id) => {
+        if (window.confirm("Are you sure you want to delete this QR?")) {
+          const updated = qrs.filter(q => q.id !== id);
+          setQrs(updated);
+          saveQRCodes(updated);
+        }
+      };
+
+      const moveQR = (index, direction) => {
+        if (direction === 'up' && index === 0) return;
+        if (direction === 'down' && index === qrs.length - 1) return;
+
+        const newQrs = [...qrs];
+        const targetIndex = direction === 'up' ? index - 1 : index + 1;
+        
+        [newQrs[index], newQrs[targetIndex]] = [newQrs[targetIndex], newQrs[index]];
+        
+        setQrs(newQrs);
+        saveQRCodes(newQrs);
+      };
+
+      const handleIntervalChange = (val) => {
+        const num = parseInt(val);
+        if (!isNaN(num) && num > 0) {
+          setIntervalVal(num);
+          saveSettings({ intervalSeconds: num });
+        }
+      };
+
+      if (!isAuthenticated) {
+        return React.createElement('div', { className: "min-h-screen bg-black flex items-center justify-center p-4" },
+          React.createElement('div', { className: "w-full max-w-md bg-zinc-900 border border-zinc-800 p-8 rounded-2xl shadow-2xl" },
+            React.createElement('div', { className: "flex justify-center mb-6 text-zinc-500" },
+              React.createElement(Lock, { size: 48 })
+            ),
+            React.createElement('h2', { className: "text-2xl font-bold text-white text-center mb-2" }, "Restricted Access"),
+            React.createElement('p', { className: "text-zinc-400 text-center mb-8" }, "Enter security PIN to manage system."),
+            React.createElement('form', { onSubmit: handleLogin, className: "space-y-4" },
+              React.createElement('input', {
+                type: "password",
+                value: passwordInput,
+                onChange: (e) => setPasswordInput(e.target.value),
+                placeholder: "Enter PIN",
+                className: "w-full bg-black border border-zinc-700 text-white px-4 py-3 rounded-lg focus:outline-none focus:border-blue-500 transition-colors text-center tracking-widest text-lg"
+              }),
+              React.createElement('button', {
+                type: "submit",
+                className: "w-full bg-white text-black font-bold py-3 rounded-lg hover:bg-gray-200 transition-colors"
+              }, "Unlock Panel")
+            )
+          )
+        );
+      }
+
+      return React.createElement('div', { className: "min-h-screen bg-black text-white flex flex-col md:flex-row font-sans" },
+        React.createElement('div', { className: "w-full md:w-64 bg-zinc-950 border-r border-zinc-800 flex flex-col p-6 fixed md:relative z-20 h-auto md:h-screen" },
+          React.createElement('div', { className: "mb-10" },
+            React.createElement('h1', { className: "text-2xl font-extrabold tracking-tighter text-transparent bg-clip-text bg-gradient-to-br from-white to-zinc-500" },
+              "REVIEW PARTNER"
+            ),
+            React.createElement('p', { className: "text-xs text-zinc-500 font-mono mt-1" }, "ADMIN CONSOLE v1.0")
+          ),
+          React.createElement('div', { className: "space-y-6" },
+            React.createElement('div', { className: "bg-zinc-900 p-4 rounded-xl border border-zinc-800" },
+              React.createElement('div', { className: "flex items-center gap-3 text-zinc-400 mb-2" },
+                React.createElement(Activity, { size: 16 }),
+                React.createElement('span', { className: "text-xs font-bold uppercase" }, "Total Clicks")
+              ),
+              React.createElement('div', { className: "text-3xl font-mono font-bold text-green-400" },
+                stats.totalContributions
+              )
+            ),
+            React.createElement('div', { className: "bg-zinc-900 p-4 rounded-xl border border-zinc-800" },
+              React.createElement('div', { className: "flex items-center gap-3 text-zinc-400 mb-2" },
+                React.createElement(Clock, { size: 16 }),
+                React.createElement('span', { className: "text-xs font-bold uppercase" }, "Rotation Interval (s)")
+              ),
+              React.createElement('input', {
+                type: "number",
+                value: interval,
+                onChange: (e) => handleIntervalChange(e.target.value),
+                className: "w-full bg-black border border-zinc-700 text-white p-2 rounded focus:outline-none focus:border-blue-500"
+              })
+            )
+          )
+        ),
+        React.createElement('div', { className: "flex-1 p-6 md:p-10 overflow-y-auto" },
+          React.createElement('header', { className: "flex justify-between items-center mb-10" },
+            React.createElement('h2', { className: "text-3xl font-bold" }, "QR Management"),
+            React.createElement('button', {
+              onClick: () => fileInputRef.current?.click(),
+              className: "flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-full font-semibold transition-all shadow-lg shadow-blue-900/20"
+            },
+              React.createElement(Plus, { size: 20 }),
+              React.createElement('span', null, "Add New QR")
+            ),
+            React.createElement('input', {
+              type: "file",
+              ref: fileInputRef,
+              onChange: handleFileUpload,
+              className: "hidden",
+              accept: "image/*"
+            })
+          ),
+          qrs.length === 0 ?
+            React.createElement('div', { className: "border-2 border-dashed border-zinc-800 rounded-3xl p-20 text-center text-zinc-600" },
+              React.createElement(Upload, { className: "mx-auto mb-4 opacity-50", size: 48 }),
+              React.createElement('p', null, "No QR Codes active. Add one to start.")
+            ) :
+            React.createElement('div', { className: "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" },
+              qrs.map((qr, index) =>
+                React.createElement('div', {
+                  key: qr.id,
+                  className: "bg-zinc-900 border border-zinc-800 rounded-2xl p-4 flex flex-col gap-4 group hover:border-zinc-600 transition-colors"
+                },
+                  React.createElement('div', { className: "relative aspect-square bg-white rounded-xl flex items-center justify-center overflow-hidden p-4" },
+                    React.createElement('img', { src: qr.base64, alt: "QR", className: "w-full h-full object-contain" }),
+                    React.createElement('div', { className: "absolute top-2 left-2 bg-black/70 text-white text-xs px-2 py-1 rounded font-mono" },
+                      `#${index + 1}`
+                    )
+                  ),
+                  React.createElement('div', { className: "flex items-center justify-between mt-auto" },
+                    React.createElement('div', { className: "flex items-center gap-2" },
+                      React.createElement('button', {
+                        onClick: () => moveQR(index, 'up'),
+                        disabled: index === 0,
+                        className: "p-2 hover:bg-zinc-800 rounded-lg text-zinc-400 disabled:opacity-30 transition-colors",
+                        title: "Move Up"
+                      }, React.createElement(ArrowUp, { size: 18 })),
+                      React.createElement('button', {
+                        onClick: () => moveQR(index, 'down'),
+                        disabled: index === qrs.length - 1,
+                        className: "p-2 hover:bg-zinc-800 rounded-lg text-zinc-400 disabled:opacity-30 transition-colors",
+                        title: "Move Down"
+                      }, React.createElement(ArrowDown, { size: 18 }))
+                    ),
+                    React.createElement('button', {
+                      onClick: () => deleteQR(qr.id),
+                      className: "flex items-center gap-2 text-red-400 hover:text-red-300 hover:bg-red-400/10 px-3 py-2 rounded-lg transition-colors text-sm font-medium"
+                    },
+                      React.createElement(Trash2, { size: 16 }),
+                      React.createElement('span', null, "Delete")
+                    )
+                  )
+                )
+              )
+            )
+        )
+      );
+    };
+
+    const root = createRoot(document.getElementById('root'));
+    root.render(React.createElement(AdminPage));
+  </script>
+</body>
+</html>
