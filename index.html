@@ -28,7 +28,6 @@
           animation: {
             'blob': 'blob 7s infinite',
             'fade-in': 'fadeIn 0.5s ease-out forwards',
-            'slide-in': 'slideIn 0.3s ease-out forwards',
           },
           keyframes: {
             blob: {
@@ -40,10 +39,6 @@
             fadeIn: {
               '0%': { opacity: '0' },
               '100%': { opacity: '1' },
-            },
-            slideIn: {
-              '0%': { transform: 'translateX(-100%)' },
-              '100%': { transform: 'translateX(0)' },
             }
           }
         }
@@ -54,28 +49,61 @@
   <style>
     body {
       font-family: 'Inter', sans-serif;
-      overflow-x: hidden;
-    }
-    /* Hide scrollbar */
-    .no-scrollbar::-webkit-scrollbar {
-      display: none;
-    }
-    .no-scrollbar {
-      -ms-overflow-style: none;
-      scrollbar-width: none;
+      overflow: hidden; /* Global lock */
+      height: 100vh;
+      height: 100dvh;
     }
     
+    #app {
+      height: 100%;
+      width: 100%;
+      overflow: hidden;
+    }
+
     /* Transitions for dark mode */
     .transition-colors-custom {
       transition: background-color 0.5s ease, color 0.5s ease;
     }
 
-    /* Base64 Image container helper */
-    .qr-container img {
+    /* Hotstar-style Carousel Logic */
+    .carousel-track {
+      position: relative;
       width: 100%;
       height: 100%;
-      object-fit: contain;
+      overflow: hidden;
     }
+    
+    .carousel-slide {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      padding: 1rem;
+      transition: transform 0.6s cubic-bezier(0.25, 1, 0.5, 1);
+      will-change: transform;
+    }
+    
+    /* States for animation */
+    .slide-current { transform: translateX(0); z-index: 10; }
+    .slide-next { transform: translateX(100%); z-index: 20; }
+    .slide-prev { transform: translateX(-100%); z-index: 0; }
+
+    /* Custom Scrollbar */
+    .custom-scroll::-webkit-scrollbar {
+      width: 4px;
+    }
+    .custom-scroll::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .custom-scroll::-webkit-scrollbar-thumb {
+      background-color: rgba(156, 163, 175, 0.5);
+      border-radius: 20px;
+    }
+    
+    /* Hide scrollbar utility */
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
   </style>
 <script type="importmap">
 {
@@ -92,28 +120,32 @@
 </head>
 <body class="bg-gray-50 text-gray-900 dark:bg-zinc-950 dark:text-gray-100 transition-colors-custom">
   
-  <!-- App Root -->
-  <div id="app" class="min-h-screen w-full relative overflow-hidden"></div>
+  <div id="app"></div>
 
-  <!-- Application Logic -->
+  <!-- Firebase Modular SDK -->
   <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+    import { getDatabase, ref, onValue, set, runTransaction } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+
     // ==========================================
-    // CONSTANTS & TYPES
+    // CONFIGURATION
     // ==========================================
-    const STORAGE_KEYS = {
-      QRS: 'review_partner_qrs',
-      SETTINGS: 'review_partner_settings',
-      STATS: 'review_partner_stats',
-      THEME: 'review_partner_theme',
+    const FIREBASE_CONFIG = {
+      apiKey: "AIzaSyCEhEQ0s_3CP6FcyL5Cwpc6nV6wRhxQJ9U",
+      authDomain: "qr-scanner-e0f27.firebaseapp.com",
+      databaseURL: "https://qr-scanner-e0f27-default-rtdb.asia-southeast1.firebasedatabase.app",
+      projectId: "qr-scanner-e0f27",
+      storageBucket: "qr-scanner-e0f27.firebasestorage.app",
+      messagingSenderId: "600985068770",
+      appId: "1:600985068770:web:db5c50979b22b81ab56abb"
     };
 
     const ADMIN_PASS = "12345676";
-    
     const DEFAULT_SETTINGS = { intervalSeconds: 10 };
     const DEFAULT_STATS = { totalContributions: 0, lastResetTime: Date.now() };
 
     // ==========================================
-    // STATE MANAGEMENT (Global)
+    // STATE
     // ==========================================
     let state = {
       qrs: [],
@@ -121,243 +153,192 @@
       stats: DEFAULT_STATS,
       isAuthenticated: false,
       currentQRIndex: 0,
-      isSidebarOpen: false,
       rotationIntervalId: null,
-      statsIntervalId: null,
-      passwordInput: ""
+      passwordInput: "",
+      db: null,
+      isConnected: false
     };
 
     // ==========================================
-    // SERVICES (Storage)
+    // FIREBASE SERVICE
     // ==========================================
-    const StorageService = {
-      loadAll: () => {
-        // Load QRs
+    const DB = {
+      init: () => {
         try {
-          const qrs = localStorage.getItem(STORAGE_KEYS.QRS);
-          state.qrs = qrs ? JSON.parse(qrs) : [];
-        } catch(e) { state.qrs = []; }
-
-        // Load Settings
-        try {
-          const sett = localStorage.getItem(STORAGE_KEYS.SETTINGS);
-          state.settings = sett ? JSON.parse(sett) : DEFAULT_SETTINGS;
-        } catch(e) { state.settings = DEFAULT_SETTINGS; }
-
-        // Load Stats & Check Reset Logic
-        StorageService.getStats();
-      },
-
-      getStats: () => {
-        try {
-          const data = localStorage.getItem(STORAGE_KEYS.STATS);
-          let stats = data ? JSON.parse(data) : DEFAULT_STATS;
-          
-          // 24h Reset Logic
-          const now = Date.now();
-          if (now - stats.lastResetTime > 86400000) { // 24 hours in ms
-            stats = { totalContributions: 0, lastResetTime: now };
-            localStorage.setItem(STORAGE_KEYS.STATS, JSON.stringify(stats));
-          }
-          state.stats = stats;
-          return stats;
-        } catch(e) {
-          state.stats = DEFAULT_STATS;
-          return DEFAULT_STATS;
+          const app = initializeApp(FIREBASE_CONFIG);
+          state.db = getDatabase(app);
+          state.isConnected = true;
+          DB.listen();
+        } catch (e) {
+          console.error("Firebase Init Error", e);
+          state.isConnected = false;
         }
       },
 
-      saveQRs: (newQRs) => {
-        state.qrs = newQRs;
-        localStorage.setItem(STORAGE_KEYS.QRS, JSON.stringify(newQRs));
-        render(); // Re-render to show changes
+      listen: () => {
+        if (!state.db) return;
+
+        // QRs Listener
+        onValue(ref(state.db, 'qrs'), (snapshot) => {
+          state.qrs = snapshot.val() || [];
+          if (window.location.hash === '#/admin') render(); 
+        });
+
+        // Settings Listener
+        onValue(ref(state.db, 'settings'), (snapshot) => {
+          state.settings = snapshot.val() || DEFAULT_SETTINGS;
+          if (window.location.hash === '#/admin') {
+             // Update input value if changed externally
+             const input = document.getElementById('input-interval');
+             if(input && document.activeElement !== input) input.value = state.settings.intervalSeconds;
+          } else {
+             startDisplayRotation();
+          }
+        });
+
+        // Stats Listener
+        onValue(ref(state.db, 'stats'), (snapshot) => {
+          const data = snapshot.val();
+          if (data) {
+             const now = Date.now();
+             if (now - data.lastResetTime > 86400000) {
+                DB.resetStats(); 
+             } else {
+                state.stats = data;
+                updateCounters();
+             }
+          } else {
+              state.stats = DEFAULT_STATS;
+          }
+        });
       },
 
-      saveSettings: (newSettings) => {
-        state.settings = newSettings;
-        localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(newSettings));
+      // Write Operations
+      addQR: (qr) => {
+        if (!state.db) return;
+        set(ref(state.db, 'qrs'), [...state.qrs, qr]);
       },
-
+      deleteQR: (id) => {
+        if (!state.db) return;
+        set(ref(state.db, 'qrs'), state.qrs.filter(q => q.id !== id));
+      },
+      reorderQRs: (newQRs) => {
+        if (!state.db) return;
+        set(ref(state.db, 'qrs'), newQRs);
+      },
+      updateSettings: (newSettings) => {
+        if (!state.db) return;
+        set(ref(state.db, 'settings'), newSettings);
+      },
       incrementStats: () => {
-        const stats = StorageService.getStats();
-        const newStats = { ...stats, totalContributions: stats.totalContributions + 1 };
-        localStorage.setItem(STORAGE_KEYS.STATS, JSON.stringify(newStats));
-        state.stats = newStats;
-        // Update DOM directly for smoother animation
-        const counterEl = document.getElementById('counter-display');
-        if(counterEl) counterEl.textContent = newStats.totalContributions;
+        if (!state.db) return;
+        runTransaction(ref(state.db, 'stats'), (current) => {
+          if (current) {
+            return { ...current, totalContributions: current.totalContributions + 1 };
+          }
+          return { totalContributions: 1, lastResetTime: Date.now() };
+        });
       },
-
-      manualResetStats: () => {
-        const newStats = { totalContributions: 0, lastResetTime: Date.now() };
-        localStorage.setItem(STORAGE_KEYS.STATS, JSON.stringify(newStats));
-        state.stats = newStats;
-        render();
-      },
-
-      exportData: () => {
-        const data = {
-          qrs: state.qrs,
-          settings: state.settings,
-          stats: state.stats,
-          timestamp: Date.now(),
-        };
-        const jsonString = JSON.stringify(data);
-        const blob = new Blob([jsonString], { type: "application/json" });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = `review-partner-data-${new Date().toISOString().slice(0,10)}.json`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+      resetStats: () => {
+        if (!state.db) return;
+        set(ref(state.db, 'stats'), { totalContributions: 0, lastResetTime: Date.now() });
       }
     };
 
     // ==========================================
-    // THEME LOGIC
+    // GLOBAL EXPORTS (Crucial for HTML onclicks)
     // ==========================================
-    const ThemeService = {
+    window.DB = DB;
+    window.state = state;
+
+    // ==========================================
+    // UI HELPERS
+    // ==========================================
+    const Theme = {
       init: () => {
-        const storedTheme = localStorage.getItem(STORAGE_KEYS.THEME);
-        if (storedTheme === 'dark' || (!storedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+        const t = localStorage.getItem('theme');
+        if (t === 'dark' || (!t && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
           document.documentElement.classList.add('dark');
         } else {
           document.documentElement.classList.remove('dark');
         }
       },
       toggle: () => {
-        if (document.documentElement.classList.contains('dark')) {
-          document.documentElement.classList.remove('dark');
-          localStorage.setItem(STORAGE_KEYS.THEME, 'light');
-        } else {
-          document.documentElement.classList.add('dark');
-          localStorage.setItem(STORAGE_KEYS.THEME, 'dark');
-        }
-        // Re-render icons slightly later to ensure correct SVG if needed, though Lucide uses currentColor
+        const isDark = document.documentElement.classList.toggle('dark');
+        localStorage.setItem('theme', isDark ? 'dark' : 'light');
+        render(); 
       }
     };
+    window.Theme = Theme; // Export Theme
 
-    // ==========================================
-    // ROUTER
-    // ==========================================
-    const Router = {
-      routes: {
-        '/': renderDisplayPage,
-        '/admin': renderAdminPage
-      },
-      init: () => {
-        window.addEventListener('hashchange', Router.handleRoute);
-        Router.handleRoute();
-      },
-      handleRoute: () => {
-        // Clear intervals when switching pages
-        if(state.rotationIntervalId) clearInterval(state.rotationIntervalId);
-        if(state.statsIntervalId) clearInterval(state.statsIntervalId);
-        state.isSidebarOpen = false; // Reset sidebar
-        
-        const hash = window.location.hash.slice(1) || '/';
-        const renderer = Router.routes[hash] || Router.routes['/'];
-        
-        // Refresh data
-        StorageService.loadAll();
-        renderer();
-      }
-    };
-
-    // ==========================================
-    // RENDER HELPERS
-    // ==========================================
-    function render() {
-      // Re-trigger current route render
-      Router.handleRoute(); 
+    function updateCounters() {
+      const els = document.querySelectorAll('.stat-counter');
+      els.forEach(el => el.textContent = state.stats.totalContributions);
     }
 
-    function createIcon(name, size = 24, className = "") {
-      // Lucide replaces these based on data-lucide attribute
-      return `<i data-lucide="${name}" width="${size}" height="${size}" class="${className}"></i>`;
+    function createIcon(name, size = 24) {
+      return `<i data-lucide="${name}" width="${size}" height="${size}"></i>`;
     }
 
     // ==========================================
-    // DISPLAY PAGE
+    // ROUTING
     // ==========================================
-    function renderDisplayPage() {
+    function handleRoute() {
+      if(state.rotationIntervalId) clearInterval(state.rotationIntervalId);
+      
+      const hash = window.location.hash.slice(1) || '/';
       const app = document.getElementById('app');
-      
-      // Start Rotation Timer
-      if (state.qrs.length > 1) {
-        state.rotationIntervalId = setInterval(() => {
-          state.currentQRIndex = (state.currentQRIndex + 1) % state.qrs.length;
-          const imgEl = document.getElementById('qr-image');
-          if(imgEl) {
-            // Simple fade effect
-            imgEl.style.opacity = '0';
-            setTimeout(() => {
-              if(state.qrs[state.currentQRIndex]) {
-                imgEl.src = state.qrs[state.currentQRIndex].base64;
-                imgEl.style.opacity = '1';
-              }
-            }, 200);
-          }
-        }, state.settings.intervalSeconds * 1000);
+
+      if (hash === '/admin') {
+        renderAdmin(app);
+      } else {
+        renderDisplay(app);
       }
-      
-      // Check for stats update (24h reset) periodically
-      state.statsIntervalId = setInterval(() => {
-        StorageService.getStats();
-        const counterEl = document.getElementById('counter-display');
-        if(counterEl) counterEl.textContent = state.stats.totalContributions;
-      }, 60000);
+      lucide.createIcons();
+    }
 
-      const currentQR = state.qrs[state.currentQRIndex];
+    function render() {
+      // Re-render current route content
+      handleRoute();
+    }
+    window.render = render; // Export render
 
+    // ==========================================
+    // FRONTEND: DISPLAY PAGE
+    // ==========================================
+    function renderDisplay(app) {
       app.innerHTML = `
-        <!-- Blobs -->
+        <!-- Background -->
         <div class="absolute top-0 -left-10 w-96 h-96 bg-purple-300 dark:bg-purple-900/20 rounded-full mix-blend-multiply dark:mix-blend-normal filter blur-3xl opacity-50 animate-blob"></div>
         <div class="absolute top-0 -right-10 w-96 h-96 bg-blue-300 dark:bg-blue-900/20 rounded-full mix-blend-multiply dark:mix-blend-normal filter blur-3xl opacity-50 animate-blob animation-delay-2000"></div>
         <div class="absolute -bottom-20 left-1/2 w-96 h-96 bg-pink-300 dark:bg-pink-900/20 rounded-full mix-blend-multiply dark:mix-blend-normal filter blur-3xl opacity-50 animate-blob animation-delay-4000"></div>
 
-        <!-- Sidebar (Hidden by default) -->
-        <div id="sidebar-backdrop" class="fixed inset-0 bg-black/50 backdrop-blur-sm z-40 hidden transition-opacity duration-300 opacity-0"></div>
+        <!-- Sidebar -->
+        <div id="sidebar-backdrop" class="fixed inset-0 bg-black/50 backdrop-blur-sm z-40 hidden opacity-0 transition-opacity duration-300"></div>
         <div id="sidebar-panel" class="fixed top-0 left-0 h-full w-80 bg-white dark:bg-zinc-900 border-r border-gray-200 dark:border-zinc-800 z-50 shadow-2xl p-6 flex flex-col transform -translate-x-full transition-transform duration-300">
             <div class="flex justify-between items-center mb-8">
               <h2 class="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-purple-600">Menu</h2>
-              <button id="close-sidebar" class="p-2 hover:bg-gray-100 dark:hover:bg-zinc-800 rounded-full transition-colors text-gray-500 dark:text-gray-400">
-                ${createIcon('x')}
-              </button>
+              <button onclick="toggleSidebar(false)" class="p-2 hover:bg-gray-100 dark:hover:bg-zinc-800 rounded-full text-gray-500">${createIcon('x')}</button>
             </div>
-            <div class="flex-1 overflow-y-auto">
-              <div class="bg-gray-50 dark:bg-zinc-800/50 p-5 rounded-2xl border border-gray-100 dark:border-zinc-700 mb-6">
-                <div class="flex gap-3 mb-2">
-                  <div class="text-blue-600 dark:text-blue-400">${createIcon('info', 20)}</div>
-                  <h3 class="font-bold text-gray-900 dark:text-white text-sm uppercase tracking-wider">Disclaimer</h3>
-                </div>
-                <p class="text-sm text-gray-600 dark:text-gray-300 leading-relaxed text-justify">
-                  All reviews submitted through this application are voluntary. You are not forced, coerced, or incentivized to provide positive feedback. Your honest opinion helps us improve our services.
-                </p>
-              </div>
+            <div class="bg-gray-50 dark:bg-zinc-800/50 p-5 rounded-2xl border border-gray-100 dark:border-zinc-700 mb-6">
+               <h3 class="font-bold text-gray-900 dark:text-white text-sm uppercase tracking-wider mb-2 flex gap-2 items-center text-blue-500">${createIcon('info', 16)} Disclaimer</h3>
+               <p class="text-sm text-gray-600 dark:text-gray-300 text-justify">All reviews are voluntary. No incentives are provided.</p>
             </div>
-            <div class="mt-auto pt-6 border-t border-gray-100 dark:border-zinc-800">
-              <p class="text-xs text-center text-gray-400">Review Partner System v2.1</p>
+            <div class="mt-auto text-center border-t border-gray-100 dark:border-zinc-800 pt-6">
+               <button onclick="window.location.hash='/admin'" class="text-xs font-bold text-gray-400 hover:text-blue-500 uppercase tracking-widest">Admin Access</button>
             </div>
         </div>
 
-        <!-- Top Controls -->
-        <div class="absolute top-6 left-6 z-30">
-          <button id="open-sidebar" class="p-3 bg-white/50 dark:bg-zinc-800/50 backdrop-blur-md rounded-full shadow-lg text-gray-900 dark:text-white hover:scale-110 transition-transform">
-            ${createIcon('menu')}
-          </button>
-        </div>
-        <div class="absolute top-6 right-6 z-30">
-          <button id="theme-toggle-display" class="p-3 rounded-full bg-white/50 dark:bg-zinc-800/50 backdrop-blur-md shadow-lg hover:scale-110 transition-transform text-gray-600 dark:text-yellow-400">
+        <!-- Controls -->
+        <button onclick="toggleSidebar(true)" class="absolute top-6 left-6 z-30 p-3 bg-white/50 dark:bg-zinc-800/50 backdrop-blur-md rounded-full shadow-lg hover:scale-110 transition-transform text-gray-900 dark:text-white">${createIcon('menu')}</button>
+        <button onclick="Theme.toggle()" class="absolute top-6 right-6 z-30 p-3 rounded-full bg-white/50 dark:bg-zinc-800/50 backdrop-blur-md shadow-lg hover:scale-110 transition-transform text-gray-600 dark:text-yellow-400">
             ${createIcon(document.documentElement.classList.contains('dark') ? 'sun' : 'moon')}
-          </button>
-        </div>
+        </button>
 
-        <!-- Content -->
+        <!-- Main Content -->
         <div class="flex flex-col items-center justify-center h-full w-full px-6 z-10 relative">
-          <!-- Title -->
-          <div class="text-center mb-8 md:mb-12 animate-fade-in">
+          
+          <div class="text-center mb-8 mt-16 animate-fade-in">
              <h1 class="text-4xl md:text-6xl font-black tracking-tighter leading-tight mb-2">
                <span class="bg-clip-text text-transparent bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 dark:from-blue-400 dark:via-indigo-400 dark:to-purple-400">Review</span>
                <span class="text-gray-900 dark:text-white"> Partner</span>
@@ -365,307 +346,256 @@
              <p class="text-xs md:text-sm font-bold tracking-[0.2em] text-gray-400 uppercase">Contribution System</p>
           </div>
 
-          <!-- QR Card -->
-          <div class="relative mb-10 md:mb-14 animate-fade-in" style="animation-delay: 0.2s">
+          <!-- QR Carousel -->
+          <div class="relative mb-10 animate-fade-in" style="animation-delay: 0.2s">
               <div class="absolute -inset-0.5 bg-gradient-to-tr from-blue-500 to-purple-500 rounded-[2.5rem] opacity-30 blur-lg"></div>
-              <div class="relative w-[280px] h-[280px] md:w-[360px] md:h-[360px] bg-white dark:bg-zinc-900 rounded-[2rem] shadow-2xl flex items-center justify-center p-6 border border-gray-100 dark:border-zinc-800">
-                  ${currentQR 
-                    ? `<img id="qr-image" src="${currentQR.base64}" alt="QR Code" class="w-full h-full object-contain transition-opacity duration-300" />` 
-                    : `<div class="text-center"><p class="text-gray-400 text-lg font-medium">No QR Code</p><p class="text-xs text-gray-500 mt-2">Add via Admin</p></div>`
-                  }
+              <div class="relative w-[280px] h-[320px] md:w-[360px] md:h-[400px] bg-white dark:bg-zinc-900 rounded-[2.5rem] shadow-2xl overflow-hidden border border-gray-100 dark:border-zinc-800">
+                  <div id="carousel-track" class="carousel-track">
+                     <div class="flex h-full items-center justify-center text-gray-400">
+                        <div class="text-center">
+                            <div class="animate-spin mb-2 mx-auto w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full"></div>
+                            <span class="text-xs">Connecting...</span>
+                        </div>
+                     </div>
+                  </div>
+                  <!-- Bottom Trim -->
+                  <div class="absolute bottom-0 left-0 w-full h-6 bg-gradient-to-t from-white dark:from-zinc-900 to-transparent z-30"></div>
               </div>
           </div>
 
-          <!-- Contribute Button -->
-          <button id="btn-contribute" class="group relative flex items-center gap-3 bg-gray-900 dark:bg-white text-white dark:text-black px-12 py-4 rounded-2xl font-bold text-lg shadow-xl hover:scale-105 active:scale-95 transition-all animate-fade-in" style="animation-delay: 0.4s">
+          <button onclick="DB.incrementStats()" class="group relative flex items-center gap-3 bg-gray-900 dark:bg-white text-white dark:text-black px-12 py-4 rounded-2xl font-bold text-lg shadow-xl hover:scale-105 active:scale-95 transition-all animate-fade-in" style="animation-delay: 0.4s">
             <div class="absolute inset-0 rounded-2xl bg-white/20 dark:bg-black/10 blur opacity-0 group-hover:opacity-100 transition-opacity"></div>
-            ${createIcon('plus', 20, "stroke-[3px]")}
-            <span>Contribute</span>
+            ${createIcon('plus', 20)} <span>Contribute</span>
           </button>
         </div>
 
-        <!-- Floating Counter -->
+        <!-- Counter -->
         <div class="absolute bottom-6 right-6 md:bottom-10 md:right-10 flex flex-col items-end z-20 pointer-events-none select-none animate-fade-in" style="animation-delay: 0.6s">
            <span class="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-0">Total</span>
-           <div id="counter-display" class="text-6xl md:text-7xl font-mono font-black text-gray-900 dark:text-white leading-none tracking-tighter">
+           <div class="stat-counter text-6xl md:text-7xl font-mono font-black text-gray-900 dark:text-white leading-none tracking-tighter">
              ${state.stats.totalContributions}
            </div>
         </div>
       `;
 
-      // Init Icons
-      lucide.createIcons();
-
-      // Events
-      document.getElementById('btn-contribute').onclick = () => {
-        StorageService.incrementStats();
-      };
-
-      document.getElementById('theme-toggle-display').onclick = () => {
-        ThemeService.toggle();
-        // Re-render icon
-        Router.handleRoute(); 
-      };
-
-      // Sidebar Logic
-      const sidebarPanel = document.getElementById('sidebar-panel');
-      const sidebarBackdrop = document.getElementById('sidebar-backdrop');
-      
-      const openSidebar = () => {
-        sidebarBackdrop.classList.remove('hidden');
-        // Force reflow
-        void sidebarBackdrop.offsetWidth; 
-        sidebarBackdrop.classList.remove('opacity-0');
-        sidebarPanel.classList.remove('-translate-x-full');
-      };
-
-      const closeSidebar = () => {
-        sidebarPanel.classList.add('-translate-x-full');
-        sidebarBackdrop.classList.add('opacity-0');
-        setTimeout(() => {
-          sidebarBackdrop.classList.add('hidden');
-        }, 300);
-      };
-
-      document.getElementById('open-sidebar').onclick = openSidebar;
-      document.getElementById('close-sidebar').onclick = closeSidebar;
-      document.getElementById('sidebar-backdrop').onclick = closeSidebar;
+      startDisplayRotation();
     }
+
+    // ==========================================
+    // CAROUSEL LOGIC
+    // ==========================================
+    function startDisplayRotation() {
+      if (state.rotationIntervalId) clearInterval(state.rotationIntervalId);
+
+      const updateSlide = () => {
+        const track = document.getElementById('carousel-track');
+        if (!track) return;
+        
+        if (state.qrs.length === 0) {
+            track.innerHTML = `<div class="flex h-full items-center justify-center text-center p-6"><p class="text-gray-400">No QR Codes Active</p></div>`;
+            return;
+        }
+
+        if (state.qrs.length === 1) {
+            track.innerHTML = `<img src="${state.qrs[0].base64}" class="w-full h-full object-contain p-4" />`;
+            return;
+        }
+
+        if (!track.querySelector('.carousel-slide')) {
+            track.innerHTML = '';
+            const img = document.createElement('img');
+            img.src = state.qrs[state.currentQRIndex].base64;
+            img.className = 'carousel-slide slide-current object-contain';
+            track.appendChild(img);
+        }
+      };
+
+      updateSlide();
+
+      if (state.qrs.length > 1) {
+          state.rotationIntervalId = setInterval(() => {
+            const track = document.getElementById('carousel-track');
+            if(!track) return;
+
+            const nextIndex = (state.currentQRIndex + 1) % state.qrs.length;
+            const nextQR = state.qrs[nextIndex];
+
+            const currentEl = track.querySelector('.slide-current');
+            const nextEl = document.createElement('img');
+            nextEl.src = nextQR.base64;
+            nextEl.className = 'carousel-slide slide-next object-contain';
+            track.appendChild(nextEl);
+
+            void nextEl.offsetWidth; // Reflow
+
+            if(currentEl) {
+                currentEl.classList.remove('slide-current');
+                currentEl.classList.add('slide-prev');
+            }
+            nextEl.classList.remove('slide-next');
+            nextEl.classList.add('slide-current');
+
+            setTimeout(() => {
+                if(currentEl) currentEl.remove();
+            }, 600); 
+
+            state.currentQRIndex = nextIndex;
+
+          }, state.settings.intervalSeconds * 1000);
+      }
+    }
+
+    // ==========================================
+    // SIDEBAR LOGIC
+    // ==========================================
+    window.toggleSidebar = (show) => {
+        const backdrop = document.getElementById('sidebar-backdrop');
+        const panel = document.getElementById('sidebar-panel');
+        if (show) {
+            backdrop.classList.remove('hidden');
+            void backdrop.offsetWidth;
+            backdrop.classList.remove('opacity-0');
+            panel.classList.remove('-translate-x-full');
+        } else {
+            panel.classList.add('-translate-x-full');
+            backdrop.classList.add('opacity-0');
+            setTimeout(() => backdrop.classList.add('hidden'), 300);
+        }
+    };
 
     // ==========================================
     // ADMIN PAGE
     // ==========================================
-    function renderAdminPage() {
-      const app = document.getElementById('app');
-      
-      // LOGIN VIEW
+    function renderAdmin(app) {
+      // LOGIN
       if (!state.isAuthenticated) {
         app.innerHTML = `
-          <div class="min-h-screen bg-white dark:bg-black flex items-center justify-center p-4 transition-colors duration-300">
-            <div class="w-full max-w-md animate-fade-in">
-                <div class="text-center mb-10">
-                    <div class="inline-flex items-center justify-center w-20 h-20 rounded-full bg-red-100 dark:bg-red-900/20 mb-6 text-red-600 dark:text-red-500">
-                        ${createIcon('lock', 32)}
-                    </div>
-                    <h1 class="text-3xl font-bold text-gray-900 dark:text-white mb-2">Restricted Access</h1>
-                    <p class="text-gray-500 dark:text-gray-400">Please enter the security PIN.</p>
-                </div>
-                <div class="bg-gray-50 dark:bg-zinc-900 p-8 rounded-2xl border border-gray-200 dark:border-zinc-800 shadow-xl">
-                   <label class="block text-xs font-bold uppercase text-gray-400 mb-2">Security PIN</label>
-                   <input
-                     id="admin-password"
-                     type="password" 
-                     inputmode="numeric"
-                     class="w-full bg-white dark:bg-black border border-gray-200 dark:border-zinc-700 text-gray-900 dark:text-white text-center text-2xl tracking-[0.5em] font-mono py-4 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
-                     placeholder="••••••••"
-                     autofocus
-                     value="${state.passwordInput}"
-                   />
-                </div>
-                <div class="mt-8 flex justify-center">
-                  <button id="theme-toggle-login" class="p-3 rounded-full bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-yellow-400 hover:scale-110 transition-all shadow-sm">
-                    ${createIcon(document.documentElement.classList.contains('dark') ? 'sun' : 'moon')}
-                  </button>
+          <div class="h-screen bg-white dark:bg-black flex items-center justify-center p-4">
+            <div class="w-full max-w-md animate-fade-in text-center">
+                <div class="inline-flex p-4 rounded-full bg-red-100 dark:bg-red-900/20 mb-6 text-red-600 dark:text-red-500">${createIcon('lock', 32)}</div>
+                <h1 class="text-3xl font-bold mb-2 dark:text-white">Admin Access</h1>
+                <p class="text-gray-500 mb-8">Enter security PIN</p>
+                <input id="pin-input" type="password" inputmode="numeric" class="w-full bg-gray-50 dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 p-4 rounded-xl text-center text-2xl tracking-[0.5em] focus:outline-none focus:ring-2 focus:ring-blue-500 dark:text-white mb-6" placeholder="••••" autofocus>
+                <div class="flex justify-center gap-4">
+                    <button onclick="window.location.hash='/'" class="text-gray-400 hover:text-gray-600 text-sm">Cancel</button>
+                    <button onclick="Theme.toggle()" class="p-2 rounded-full bg-gray-100 dark:bg-zinc-900 dark:text-yellow-400">${createIcon(document.documentElement.classList.contains('dark')?'sun':'moon')}</button>
                 </div>
             </div>
           </div>
         `;
-        lucide.createIcons();
-        
-        const input = document.getElementById('admin-password');
-        input.focus();
-        input.oninput = (e) => {
-          state.passwordInput = e.target.value;
-          if (e.target.value === ADMIN_PASS) {
-            state.isAuthenticated = true;
-            state.passwordInput = "";
-            render();
-          }
-        };
-        document.getElementById('theme-toggle-login').onclick = () => {
-          ThemeService.toggle();
-          render();
+        document.getElementById('pin-input').oninput = (e) => {
+            if (e.target.value === ADMIN_PASS) {
+                state.isAuthenticated = true;
+                render();
+            }
         };
         return;
       }
 
-      // DASHBOARD VIEW
+      // DASHBOARD
       app.innerHTML = `
-        <div class="min-h-screen bg-gray-50 dark:bg-black text-gray-900 dark:text-white flex flex-col md:flex-row font-sans transition-colors duration-300">
-          
-          <!-- Sidebar / Controls -->
-          <div class="w-full md:w-80 bg-white dark:bg-zinc-950 border-r border-gray-200 dark:border-zinc-800 flex flex-col p-6 fixed md:relative z-20 h-auto md:h-screen shadow-lg md:shadow-none overflow-y-auto">
-            <div class="mb-8 flex justify-between items-start">
-              <div>
-                <h1 class="text-2xl font-black tracking-tighter text-transparent bg-clip-text bg-gradient-to-br from-blue-600 to-purple-600">ADMIN</h1>
-                <p class="text-xs text-gray-400 font-mono mt-1">V2.1 CONTROL CENTER</p>
-              </div>
-              <button id="theme-toggle-admin" class="p-2 rounded-full bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-yellow-400">
-                ${createIcon(document.documentElement.classList.contains('dark') ? 'sun' : 'moon')}
-              </button>
+        <div class="flex flex-col md:flex-row h-screen bg-gray-50 dark:bg-black text-gray-900 dark:text-white overflow-hidden">
+            
+            <!-- Sidebar -->
+            <div class="w-full md:w-80 bg-white dark:bg-zinc-950 border-r border-gray-200 dark:border-zinc-800 flex flex-col z-20 shadow-lg md:shadow-none h-1/3 md:h-full">
+                <div class="p-6 border-b border-gray-100 dark:border-zinc-800 flex justify-between items-center sticky top-0 bg-white dark:bg-zinc-950 z-10">
+                    <div>
+                        <h1 class="text-xl font-black text-blue-600">ADMIN</h1>
+                        <p class="text-[10px] text-green-500 font-bold tracking-wider">● ONLINE</p>
+                    </div>
+                    <button onclick="Theme.toggle()" class="p-2 rounded-full bg-gray-100 dark:bg-zinc-800 dark:text-yellow-400">${createIcon(document.documentElement.classList.contains('dark')?'sun':'moon')}</button>
+                </div>
+                
+                <div class="flex-1 overflow-y-auto custom-scroll p-6 space-y-4">
+                    <!-- Stats -->
+                    <div class="bg-blue-50 dark:bg-zinc-900 p-4 rounded-xl border border-blue-100 dark:border-zinc-800">
+                        <div class="flex justify-between items-center mb-2 text-blue-600 dark:text-blue-400">
+                            <div class="flex gap-2 items-center"><span class="text-xs font-bold uppercase">Contributions</span></div>
+                            <button onclick="if(confirm('Reset Counter to 0?')) DB.resetStats()" class="hover:text-red-500 transition-colors">${createIcon('refresh-ccw', 14)}</button>
+                        </div>
+                        <div class="stat-counter text-3xl font-mono font-bold dark:text-white">${state.stats.totalContributions}</div>
+                    </div>
+                    
+                    <!-- Settings -->
+                    <div class="bg-purple-50 dark:bg-zinc-900 p-4 rounded-xl border border-purple-100 dark:border-zinc-800">
+                        <div class="flex gap-2 items-center mb-2 text-purple-600 dark:text-purple-400"><span class="text-xs font-bold uppercase">Interval (Sec)</span></div>
+                        <input id="input-interval" type="number" value="${state.settings.intervalSeconds}" onchange="if(this.value>0) DB.updateSettings({intervalSeconds: parseInt(this.value)})" class="w-full bg-white dark:bg-black p-2 rounded border border-gray-200 dark:border-zinc-700 font-mono focus:outline-none focus:border-purple-500">
+                    </div>
+                </div>
+
+                <div class="p-4 border-t border-gray-100 dark:border-zinc-800">
+                    <button onclick="state.isAuthenticated=false; render()" class="flex items-center gap-2 text-sm text-red-500 font-bold hover:bg-red-50 dark:hover:bg-red-900/20 p-2 rounded-lg w-full transition-colors">${createIcon('log-out', 16)} Logout</button>
+                </div>
             </div>
 
-            <div class="space-y-6">
-              <!-- Stats -->
-              <div class="bg-blue-50 dark:bg-zinc-900 p-5 rounded-2xl border border-blue-100 dark:border-zinc-800">
-                <div class="flex justify-between items-start mb-2">
-                    <div class="flex items-center gap-3 text-blue-600 dark:text-blue-400">
-                        ${createIcon('activity', 18)}
-                        <span class="text-xs font-bold uppercase tracking-wider">Contributions</span>
+            <!-- Main Content -->
+            <div class="flex-1 flex flex-col h-2/3 md:h-full bg-gray-50 dark:bg-black overflow-hidden relative">
+                <div class="p-6 md:p-10 flex-1 overflow-y-auto custom-scroll">
+                    <!-- Header (Fixed Add Button) -->
+                    <div class="flex justify-between items-center mb-8">
+                        <h2 class="text-2xl font-bold">QR Management</h2>
+                        <button onclick="document.getElementById('file-upload').click()" class="bg-gray-900 dark:bg-white text-white dark:text-black px-5 py-2.5 rounded-xl text-sm font-bold shadow-sm hover:scale-105 transition-transform flex items-center gap-2">
+                            ${createIcon('plus', 18)} Add QR
+                        </button>
+                        <input type="file" id="file-upload" class="hidden" accept="image/*" onchange="handleFile(this)">
                     </div>
-                    <button id="btn-reset-counter" class="text-red-500 hover:text-red-700 dark:text-red-400" title="Reset Counter">
-                        ${createIcon('refresh-ccw', 16)}
-                    </button>
-                </div>
-                <div class="text-4xl font-mono font-bold text-gray-900 dark:text-white">
-                  ${state.stats.totalContributions}
-                </div>
-                <p class="text-[10px] text-gray-400 mt-2">Auto-resets every 24h</p>
-              </div>
 
-              <!-- Export -->
-              <div class="bg-green-50 dark:bg-zinc-900 p-5 rounded-2xl border border-green-100 dark:border-zinc-800">
-                <div class="flex items-center gap-3 text-green-600 dark:text-green-400 mb-4">
-                    ${createIcon('save', 18)}
-                    <span class="text-xs font-bold uppercase tracking-wider">Mobile Sync</span>
+                    ${state.qrs.length === 0 ? `
+                        <div class="flex flex-col items-center justify-center h-40 text-gray-400 border-2 border-dashed border-gray-200 dark:border-zinc-800 rounded-2xl">
+                            ${createIcon('cloud', 32)}
+                            <p class="mt-2 text-sm">Cloud Storage Empty</p>
+                        </div>
+                    ` : `
+                        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pb-20">
+                            ${state.qrs.map((qr, i) => `
+                                <div class="bg-white dark:bg-zinc-900 p-3 rounded-2xl border border-gray-100 dark:border-zinc-800 group hover:border-gray-300 dark:hover:border-zinc-600 transition-all shadow-sm hover:shadow-md">
+                                    <div class="aspect-square bg-gray-50 dark:bg-black rounded-xl p-4 flex items-center justify-center relative border border-gray-100 dark:border-zinc-800 mb-3">
+                                        <img src="${qr.base64}" class="w-full h-full object-contain">
+                                        <span class="absolute top-2 left-2 bg-black/50 text-white text-[10px] px-2 py-1 rounded backdrop-blur">#${i+1}</span>
+                                    </div>
+                                    <div class="flex justify-between items-center">
+                                        <div class="flex gap-1 bg-gray-50 dark:bg-black rounded-lg p-1">
+                                            <button onclick="moveQR(${i}, -1)" class="p-1.5 hover:bg-white dark:hover:bg-zinc-800 rounded text-gray-500 disabled:opacity-30" ${i===0?'disabled':''}>${createIcon('arrow-up', 14)}</button>
+                                            <button onclick="moveQR(${i}, 1)" class="p-1.5 hover:bg-white dark:hover:bg-zinc-800 rounded text-gray-500 disabled:opacity-30" ${i===state.qrs.length-1?'disabled':''}>${createIcon('arrow-down', 14)}</button>
+                                        </div>
+                                        <button onclick="if(confirm('Delete QR?')) DB.deleteQR('${qr.id}')" class="text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 p-2 rounded-lg transition-colors">${createIcon('trash-2', 16)}</button>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    `}
                 </div>
-                <p class="text-xs text-gray-600 dark:text-gray-400 mb-4 leading-relaxed">
-                    To see QRs on phone: Export here, send file to phone, import via Menu.
-                </p>
-                <button id="btn-export" class="w-full flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 text-white py-2 rounded-lg text-sm font-bold transition-colors">
-                    ${createIcon('download', 16)} Export Data
-                </button>
-              </div>
-
-              <!-- Settings -->
-              <div class="bg-purple-50 dark:bg-zinc-900 p-5 rounded-2xl border border-purple-100 dark:border-zinc-800">
-                <div class="flex items-center gap-3 text-purple-600 dark:text-purple-400 mb-2">
-                  ${createIcon('clock', 18)}
-                  <span class="text-xs font-bold uppercase tracking-wider">Interval (Sec)</span>
-                </div>
-                <input id="input-interval" type="number" value="${state.settings.intervalSeconds}" class="w-full bg-white dark:bg-black border border-gray-200 dark:border-zinc-700 text-gray-900 dark:text-white p-2 rounded-lg font-mono focus:outline-none focus:border-purple-500" />
-              </div>
             </div>
-
-            <div class="mt-auto pt-6">
-                <button id="btn-logout" class="flex items-center gap-2 text-gray-500 hover:text-red-500 transition-colors text-sm font-medium">
-                    ${createIcon('log-out', 16)} Logout
-                </button>
-            </div>
-          </div>
-
-          <!-- Main Content -->
-          <div class="flex-1 p-6 md:p-10 overflow-y-auto">
-            <header class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-10 gap-4">
-              <h2 class="text-3xl font-bold">QR Management</h2>
-              <div class="flex gap-2">
-                 <button id="btn-add-qr" class="flex items-center gap-2 bg-gray-900 dark:bg-white hover:bg-gray-800 dark:hover:bg-gray-200 text-white dark:text-black px-6 py-3 rounded-full font-bold transition-all shadow-lg hover:shadow-xl transform hover:-translate-y-1">
-                   ${createIcon('plus', 20)} <span>Add QR</span>
-                 </button>
-                 <input type="file" id="file-upload" class="hidden" accept="image/*" />
-              </div>
-            </header>
-
-            ${state.qrs.length === 0 ? `
-              <div class="border-2 border-dashed border-gray-200 dark:border-zinc-800 rounded-3xl p-20 text-center animate-fade-in">
-                <div class="w-16 h-16 bg-gray-100 dark:bg-zinc-900 rounded-full flex items-center justify-center mx-auto mb-4 text-gray-400">
-                    ${createIcon('upload', 32)}
-                </div>
-                <h3 class="text-xl font-bold text-gray-900 dark:text-white mb-2">No QR Codes Yet</h3>
-                <p class="text-gray-500">Upload an image to get started.</p>
-              </div>
-            ` : `
-              <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-6 animate-fade-in">
-                ${state.qrs.map((qr, index) => `
-                  <div class="bg-white dark:bg-zinc-900 border border-gray-100 dark:border-zinc-800 rounded-3xl p-4 flex flex-col gap-4 group hover:shadow-2xl transition-all duration-300">
-                    <div class="relative aspect-square bg-gray-50 dark:bg-black rounded-2xl flex items-center justify-center overflow-hidden p-6 border border-gray-100 dark:border-zinc-800">
-                      <img src="${qr.base64}" alt="QR" class="w-full h-full object-contain" />
-                      <div class="absolute top-3 left-3 bg-black/80 backdrop-blur text-white text-[10px] font-bold px-3 py-1 rounded-full">SEQ: ${index + 1}</div>
-                    </div>
-                    <div class="flex items-center justify-between mt-auto px-1">
-                      <div class="flex items-center gap-1 bg-gray-100 dark:bg-black rounded-xl p-1">
-                        <button class="btn-move-up p-2 hover:bg-white dark:hover:bg-zinc-800 rounded-lg text-gray-400 hover:text-gray-900 dark:hover:text-white disabled:opacity-30 transition-all shadow-sm" data-index="${index}" ${index === 0 ? 'disabled' : ''}>${createIcon('arrow-up', 18)}</button>
-                        <button class="btn-move-down p-2 hover:bg-white dark:hover:bg-zinc-800 rounded-lg text-gray-400 hover:text-gray-900 dark:hover:text-white disabled:opacity-30 transition-all shadow-sm" data-index="${index}" ${index === state.qrs.length - 1 ? 'disabled' : ''}>${createIcon('arrow-down', 18)}</button>
-                      </div>
-                      <button class="btn-delete flex items-center gap-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 px-4 py-2 rounded-xl transition-colors text-sm font-bold" data-id="${qr.id}">
-                        ${createIcon('trash-2', 18)} <span>Remove</span>
-                      </button>
-                    </div>
-                  </div>
-                `).join('')}
-              </div>
-            `}
-          </div>
         </div>
       `;
-
-      lucide.createIcons();
-
-      // Events
-      document.getElementById('theme-toggle-admin').onclick = () => { ThemeService.toggle(); render(); };
-      document.getElementById('btn-logout').onclick = () => { state.isAuthenticated = false; render(); };
-      document.getElementById('btn-reset-counter').onclick = () => {
-        if(confirm("Reset contribution counter to 0?")) StorageService.manualResetStats();
-      };
-      document.getElementById('btn-export').onclick = StorageService.exportData;
-      
-      document.getElementById('input-interval').onchange = (e) => {
-        const val = parseInt(e.target.value);
-        if(val > 0) StorageService.saveSettings({ intervalSeconds: val });
-      };
-
-      const fileInput = document.getElementById('file-upload');
-      document.getElementById('btn-add-qr').onclick = () => fileInput.click();
-      fileInput.onchange = (e) => {
-        const file = e.target.files[0];
-        if(!file) return;
-        const reader = new FileReader();
-        reader.onload = (evt) => {
-          const newQR = { id: Date.now().toString(), name: 'QR', base64: evt.target.result };
-          StorageService.saveQRs([...state.qrs, newQR]);
-        };
-        reader.readAsDataURL(file);
-      };
-
-      // Delegated events for list items
-      document.querySelectorAll('.btn-delete').forEach(btn => {
-        btn.onclick = (e) => {
-          const id = e.currentTarget.dataset.id;
-          if(confirm("Delete this QR?")) StorageService.saveQRs(state.qrs.filter(q => q.id !== id));
-        };
-      });
-
-      document.querySelectorAll('.btn-move-up').forEach(btn => {
-        btn.onclick = (e) => {
-          const index = parseInt(e.currentTarget.dataset.index);
-          if(index > 0) {
-            const newQrs = [...state.qrs];
-            [newQrs[index], newQrs[index-1]] = [newQrs[index-1], newQrs[index]];
-            StorageService.saveQRs(newQrs);
-          }
-        };
-      });
-
-      document.querySelectorAll('.btn-move-down').forEach(btn => {
-        btn.onclick = (e) => {
-          const index = parseInt(e.currentTarget.dataset.index);
-          if(index < state.qrs.length - 1) {
-            const newQrs = [...state.qrs];
-            [newQrs[index], newQrs[index+1]] = [newQrs[index+1], newQrs[index]];
-            StorageService.saveQRs(newQrs);
-          }
-        };
-      });
     }
 
     // ==========================================
-    // INITIALIZATION
+    // GLOBAL ACTIONS (for onclicks)
     // ==========================================
-    (function init() {
-      ThemeService.init();
-      StorageService.loadAll();
-      Router.init();
-    })();
+    window.handleFile = (input) => {
+        if(input.files && input.files[0]) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                DB.addQR({ id: Date.now().toString(), name: 'QR', base64: e.target.result });
+            };
+            reader.readAsDataURL(input.files[0]);
+        }
+    };
+
+    window.moveQR = (index, direction) => {
+        if ((index === 0 && direction === -1) || (index === state.qrs.length - 1 && direction === 1)) return;
+        const newQRs = [...state.qrs];
+        const target = index + direction;
+        [newQrs[index], newQrs[target]] = [newQrs[target], newQrs[index]];
+        DB.reorderQRs(newQRs);
+    };
+
+    // Initialize
+    Theme.init();
+    DB.init();
+    window.addEventListener('hashchange', handleRoute);
+    window.addEventListener('load', handleRoute);
 
   </script>
 </body>
