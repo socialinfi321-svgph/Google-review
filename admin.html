@@ -82,28 +82,18 @@
       padding: 1rem;
       transition: transform 0.6s cubic-bezier(0.25, 1, 0.5, 1);
       will-change: transform;
+      backface-visibility: hidden;
     }
     
     /* States for animation */
-    .slide-current { transform: translateX(0); z-index: 10; }
-    .slide-next { transform: translateX(100%); z-index: 20; }
-    .slide-prev { transform: translateX(-100%); z-index: 0; }
+    .slide-current { transform: translateX(0); z-index: 10; opacity: 1; }
+    .slide-next { transform: translateX(100%); z-index: 20; opacity: 1; }
+    .slide-prev { transform: translateX(-100%); z-index: 0; opacity: 1; }
 
     /* Custom Scrollbar */
-    .custom-scroll::-webkit-scrollbar {
-      width: 4px;
-    }
-    .custom-scroll::-webkit-scrollbar-track {
-      background: transparent;
-    }
-    .custom-scroll::-webkit-scrollbar-thumb {
-      background-color: rgba(156, 163, 175, 0.5);
-      border-radius: 20px;
-    }
-    
-    /* Hide scrollbar utility */
-    .no-scrollbar::-webkit-scrollbar { display: none; }
-    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    .custom-scroll::-webkit-scrollbar { width: 4px; }
+    .custom-scroll::-webkit-scrollbar-track { background: transparent; }
+    .custom-scroll::-webkit-scrollbar-thumb { background-color: rgba(156, 163, 175, 0.5); border-radius: 20px; }
   </style>
 <script type="importmap">
 {
@@ -160,10 +150,30 @@
     };
 
     // ==========================================
+    // CACHE SERVICE (Instant Load)
+    // ==========================================
+    const Cache = {
+        save: (key, data) => localStorage.setItem('rp_' + key, JSON.stringify(data)),
+        load: (key, def) => {
+            const d = localStorage.getItem('rp_' + key);
+            return d ? JSON.parse(d) : def;
+        }
+    };
+
+    // ==========================================
     // FIREBASE SERVICE
     // ==========================================
     const DB = {
       init: () => {
+        // 1. Load from Cache IMMEDIATELY (Fixes Slow Load)
+        state.qrs = Cache.load('qrs', []);
+        state.settings = Cache.load('settings', DEFAULT_SETTINGS);
+        state.stats = Cache.load('stats', DEFAULT_STATS);
+        
+        // Initial Render with cached data
+        render();
+
+        // 2. Connect to Network
         try {
           const app = initializeApp(FIREBASE_CONFIG);
           state.db = getDatabase(app);
@@ -180,19 +190,22 @@
 
         // QRs Listener
         onValue(ref(state.db, 'qrs'), (snapshot) => {
-          state.qrs = snapshot.val() || [];
+          const val = snapshot.val() || [];
+          state.qrs = val;
+          Cache.save('qrs', val); // Update cache
           if (window.location.hash === '#/admin') render(); 
+          // Note: Display rotation updates automatically via the timer loop
         });
 
         // Settings Listener
         onValue(ref(state.db, 'settings'), (snapshot) => {
-          state.settings = snapshot.val() || DEFAULT_SETTINGS;
+          const val = snapshot.val() || DEFAULT_SETTINGS;
+          state.settings = val;
+          Cache.save('settings', val);
+          
           if (window.location.hash === '#/admin') {
-             // Update input value if changed externally
              const input = document.getElementById('input-interval');
              if(input && document.activeElement !== input) input.value = state.settings.intervalSeconds;
-          } else {
-             startDisplayRotation();
           }
         });
 
@@ -205,6 +218,7 @@
                 DB.resetStats(); 
              } else {
                 state.stats = data;
+                Cache.save('stats', data);
                 updateCounters();
              }
           } else {
@@ -246,7 +260,7 @@
     };
 
     // ==========================================
-    // GLOBAL EXPORTS (Crucial for HTML onclicks)
+    // GLOBAL EXPORTS
     // ==========================================
     window.DB = DB;
     window.state = state;
@@ -269,7 +283,7 @@
         render(); 
       }
     };
-    window.Theme = Theme; // Export Theme
+    window.Theme = Theme; 
 
     function updateCounters() {
       const els = document.querySelectorAll('.stat-counter');
@@ -284,7 +298,11 @@
     // ROUTING
     // ==========================================
     function handleRoute() {
-      if(state.rotationIntervalId) clearInterval(state.rotationIntervalId);
+      // Clear legacy timer
+      if(state.rotationIntervalId) {
+          clearInterval(state.rotationIntervalId);
+          state.rotationIntervalId = null;
+      }
       
       const hash = window.location.hash.slice(1) || '/';
       const app = document.getElementById('app');
@@ -298,10 +316,9 @@
     }
 
     function render() {
-      // Re-render current route content
       handleRoute();
     }
-    window.render = render; // Export render
+    window.render = render;
 
     // ==========================================
     // FRONTEND: DISPLAY PAGE
@@ -351,12 +368,7 @@
               <div class="absolute -inset-0.5 bg-gradient-to-tr from-blue-500 to-purple-500 rounded-[2.5rem] opacity-30 blur-lg"></div>
               <div class="relative w-[280px] h-[320px] md:w-[360px] md:h-[400px] bg-white dark:bg-zinc-900 rounded-[2.5rem] shadow-2xl overflow-hidden border border-gray-100 dark:border-zinc-800">
                   <div id="carousel-track" class="carousel-track">
-                     <div class="flex h-full items-center justify-center text-gray-400">
-                        <div class="text-center">
-                            <div class="animate-spin mb-2 mx-auto w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full"></div>
-                            <span class="text-xs">Connecting...</span>
-                        </div>
-                     </div>
+                     <!-- Content injected by JS -->
                   </div>
                   <!-- Bottom Trim -->
                   <div class="absolute bottom-0 left-0 w-full h-6 bg-gradient-to-t from-white dark:from-zinc-900 to-transparent z-30"></div>
@@ -382,67 +394,61 @@
     }
 
     // ==========================================
-    // CAROUSEL LOGIC
+    // CAROUSEL LOGIC (TIMESTAMP SYNCED)
     // ==========================================
     function startDisplayRotation() {
-      if (state.rotationIntervalId) clearInterval(state.rotationIntervalId);
-
+      // Logic: Calculate based on Date.now() so all devices show same QR at same time
       const updateSlide = () => {
         const track = document.getElementById('carousel-track');
         if (!track) return;
         
         if (state.qrs.length === 0) {
-            track.innerHTML = `<div class="flex h-full items-center justify-center text-center p-6"><p class="text-gray-400">No QR Codes Active</p></div>`;
+            track.innerHTML = `<div class="flex h-full items-center justify-center text-center p-6"><p class="text-gray-400">No QR Codes</p></div>`;
             return;
         }
 
-        if (state.qrs.length === 1) {
-            track.innerHTML = `<img src="${state.qrs[0].base64}" class="w-full h-full object-contain p-4" />`;
-            return;
-        }
-
-        if (!track.querySelector('.carousel-slide')) {
-            track.innerHTML = '';
-            const img = document.createElement('img');
-            img.src = state.qrs[state.currentQRIndex].base64;
-            img.className = 'carousel-slide slide-current object-contain';
-            track.appendChild(img);
+        // Calculate Global Index
+        const now = Math.floor(Date.now() / 1000);
+        const interval = state.settings.intervalSeconds || 10;
+        const globalIndex = Math.floor(now / interval) % state.qrs.length;
+        
+        const qr = state.qrs[globalIndex];
+        
+        // Only update DOM if changed
+        const currentImg = track.querySelector('img');
+        if (!currentImg || currentImg.getAttribute('data-id') !== qr.id) {
+             // Animate Swap
+             const nextEl = document.createElement('img');
+             nextEl.src = qr.base64;
+             nextEl.setAttribute('data-id', qr.id);
+             nextEl.className = 'carousel-slide slide-next object-contain';
+             
+             if(currentImg) {
+                // If existing, append next and animate
+                track.appendChild(nextEl);
+                void nextEl.offsetWidth; // Reflow
+                
+                currentImg.classList.remove('slide-current');
+                currentImg.classList.add('slide-prev');
+                
+                nextEl.classList.remove('slide-next');
+                nextEl.classList.add('slide-current');
+                
+                setTimeout(() => currentImg.remove(), 600);
+             } else {
+                 // First load - instant
+                 nextEl.classList.remove('slide-next');
+                 nextEl.classList.add('slide-current');
+                 track.appendChild(nextEl);
+             }
         }
       };
 
+      // Run immediately
       updateSlide();
 
-      if (state.qrs.length > 1) {
-          state.rotationIntervalId = setInterval(() => {
-            const track = document.getElementById('carousel-track');
-            if(!track) return;
-
-            const nextIndex = (state.currentQRIndex + 1) % state.qrs.length;
-            const nextQR = state.qrs[nextIndex];
-
-            const currentEl = track.querySelector('.slide-current');
-            const nextEl = document.createElement('img');
-            nextEl.src = nextQR.base64;
-            nextEl.className = 'carousel-slide slide-next object-contain';
-            track.appendChild(nextEl);
-
-            void nextEl.offsetWidth; // Reflow
-
-            if(currentEl) {
-                currentEl.classList.remove('slide-current');
-                currentEl.classList.add('slide-prev');
-            }
-            nextEl.classList.remove('slide-next');
-            nextEl.classList.add('slide-current');
-
-            setTimeout(() => {
-                if(currentEl) currentEl.remove();
-            }, 600); 
-
-            state.currentQRIndex = nextIndex;
-
-          }, state.settings.intervalSeconds * 1000);
-      }
+      // Check every 1s for change (lighter than interval)
+      state.rotationIntervalId = setInterval(updateSlide, 1000);
     }
 
     // ==========================================
@@ -507,7 +513,6 @@
                 </div>
                 
                 <div class="flex-1 overflow-y-auto custom-scroll p-6 space-y-4">
-                    <!-- Stats -->
                     <div class="bg-blue-50 dark:bg-zinc-900 p-4 rounded-xl border border-blue-100 dark:border-zinc-800">
                         <div class="flex justify-between items-center mb-2 text-blue-600 dark:text-blue-400">
                             <div class="flex gap-2 items-center"><span class="text-xs font-bold uppercase">Contributions</span></div>
@@ -515,14 +520,11 @@
                         </div>
                         <div class="stat-counter text-3xl font-mono font-bold dark:text-white">${state.stats.totalContributions}</div>
                     </div>
-                    
-                    <!-- Settings -->
                     <div class="bg-purple-50 dark:bg-zinc-900 p-4 rounded-xl border border-purple-100 dark:border-zinc-800">
                         <div class="flex gap-2 items-center mb-2 text-purple-600 dark:text-purple-400"><span class="text-xs font-bold uppercase">Interval (Sec)</span></div>
                         <input id="input-interval" type="number" value="${state.settings.intervalSeconds}" onchange="if(this.value>0) DB.updateSettings({intervalSeconds: parseInt(this.value)})" class="w-full bg-white dark:bg-black p-2 rounded border border-gray-200 dark:border-zinc-700 font-mono focus:outline-none focus:border-purple-500">
                     </div>
                 </div>
-
                 <div class="p-4 border-t border-gray-100 dark:border-zinc-800">
                     <button onclick="state.isAuthenticated=false; render()" class="flex items-center gap-2 text-sm text-red-500 font-bold hover:bg-red-50 dark:hover:bg-red-900/20 p-2 rounded-lg w-full transition-colors">${createIcon('log-out', 16)} Logout</button>
                 </div>
@@ -531,7 +533,7 @@
             <!-- Main Content -->
             <div class="flex-1 flex flex-col h-2/3 md:h-full bg-gray-50 dark:bg-black overflow-hidden relative">
                 <div class="p-6 md:p-10 flex-1 overflow-y-auto custom-scroll">
-                    <!-- Header (Fixed Add Button) -->
+                    <!-- Fixed Add Button -->
                     <div class="flex justify-between items-center mb-8">
                         <h2 class="text-2xl font-bold">QR Management</h2>
                         <button onclick="document.getElementById('file-upload').click()" class="bg-gray-900 dark:bg-white text-white dark:text-black px-5 py-2.5 rounded-xl text-sm font-bold shadow-sm hover:scale-105 transition-transform flex items-center gap-2">
@@ -554,11 +556,12 @@
                                         <span class="absolute top-2 left-2 bg-black/50 text-white text-[10px] px-2 py-1 rounded backdrop-blur">#${i+1}</span>
                                     </div>
                                     <div class="flex justify-between items-center">
-                                        <div class="flex gap-1 bg-gray-50 dark:bg-black rounded-lg p-1">
-                                            <button onclick="moveQR(${i}, -1)" class="p-1.5 hover:bg-white dark:hover:bg-zinc-800 rounded text-gray-500 disabled:opacity-30" ${i===0?'disabled':''}>${createIcon('arrow-up', 14)}</button>
-                                            <button onclick="moveQR(${i}, 1)" class="p-1.5 hover:bg-white dark:hover:bg-zinc-800 rounded text-gray-500 disabled:opacity-30" ${i===state.qrs.length-1?'disabled':''}>${createIcon('arrow-down', 14)}</button>
+                                        <!-- Fixed Arrow Buttons: Bigger Touch Area -->
+                                        <div class="flex gap-2 bg-gray-50 dark:bg-black rounded-lg p-1.5">
+                                            <button onclick="moveQR(${i}, -1)" class="p-2 hover:bg-white dark:hover:bg-zinc-800 rounded text-gray-500 disabled:opacity-30" ${i===0?'disabled':''}>${createIcon('arrow-up', 18)}</button>
+                                            <button onclick="moveQR(${i}, 1)" class="p-2 hover:bg-white dark:hover:bg-zinc-800 rounded text-gray-500 disabled:opacity-30" ${i===state.qrs.length-1?'disabled':''}>${createIcon('arrow-down', 18)}</button>
                                         </div>
-                                        <button onclick="if(confirm('Delete QR?')) DB.deleteQR('${qr.id}')" class="text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 p-2 rounded-lg transition-colors">${createIcon('trash-2', 16)}</button>
+                                        <button onclick="if(confirm('Delete QR?')) DB.deleteQR('${qr.id}')" class="text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 p-2 rounded-lg transition-colors">${createIcon('trash-2', 18)}</button>
                                     </div>
                                 </div>
                             `).join('')}
@@ -584,6 +587,7 @@
     };
 
     window.moveQR = (index, direction) => {
+        // Debounce simple clicks
         if ((index === 0 && direction === -1) || (index === state.qrs.length - 1 && direction === 1)) return;
         const newQRs = [...state.qrs];
         const target = index + direction;
